@@ -21,12 +21,12 @@ const MultiSpinWheelOfFortune = () => {
 
   useEffect(() => {
     localStorage.setItem('participants', JSON.stringify(participants));
-    localStorage.setItem('penalties', JSON.stringify(penalties));
-  }, [participants, penalties]);
-
-  useEffect(() => {
     setRemainingParticipants([...participants]);
   }, [participants]);
+
+  useEffect(() => {
+    localStorage.setItem('penalties', JSON.stringify(penalties));
+  }, [penalties]);
 
   const addParticipant = () => {
     if (newParticipant.trim() !== '') {
@@ -92,11 +92,19 @@ const MultiSpinWheelOfFortune = () => {
     const y = 50 + radius * Math.sin(angle * Math.PI / 180);
     const rotation = angle > 90 && angle < 270 ? angle + 180 : angle;
     
+    // 한글 텍스트 길이에 따른 글자 크기 조정
+    let fontSize = 3;
+    if (text.length > 3) {
+      fontSize = 3 - (text.length - 3) * 0.3;
+    }
+    fontSize = Math.max(fontSize, 1.5); // 최소 글자 크기 설정
+    
     return {
       x, 
       y, 
       rotate: rotation,
-      text: text.length > 8 ? text.slice(0, 8) + '...' : text
+      text: text.length > 8 ? text.slice(0, 8) + '...' : text,
+      fontSize: fontSize
     };
   };
 
@@ -108,11 +116,11 @@ const MultiSpinWheelOfFortune = () => {
   };
 
   return (
-    <div className="p-2 bg-gradient-to-br from-yellow-400 via-red-500 to-pink-500 min-h-screen flex items-center justify-center font-sans">
-      <div className="bg-white rounded-lg shadow-xl p-4 max-w-md w-full">
-        <h1 className="text-2xl font-bold text-center text-pink-600 mb-4">🎉 다중 회전 운명의 룰렛 🎊</h1>
+    <div className="p-4 bg-gradient-to-br from-yellow-400 via-red-500 to-pink-500 min-h-screen flex items-center justify-center font-sans">
+      <div className="bg-white rounded-lg shadow-xl p-6 max-w-md w-full">
+        <h1 className="text-2xl font-bold text-center text-pink-600 mb-6">🎉 다중 회전 운명의 룰렛 🎊</h1>
         
-        <div className="grid grid-cols-1 gap-4 mb-4">
+        <div className="grid grid-cols-1 gap-4 mb-6">
           <div>
             <h2 className="text-lg font-semibold mb-2 text-pink-500"><User className="inline mr-2" />참가자</h2>
             <div className="flex">
@@ -145,8 +153,8 @@ const MultiSpinWheelOfFortune = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div className="max-h-32 overflow-y-auto bg-pink-50 p-2 rounded">
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="max-h-40 overflow-y-auto bg-pink-50 p-2 rounded">
             {participants.map((participant, index) => (
               <div key={index} className="flex justify-between items-center bg-white p-1 rounded mb-1 text-sm">
                 <span className="text-pink-600">{participant}</span>
@@ -156,7 +164,7 @@ const MultiSpinWheelOfFortune = () => {
               </div>
             ))}
           </div>
-          <div className="max-h-32 overflow-y-auto bg-purple-50 p-2 rounded">
+          <div className="max-h-40 overflow-y-auto bg-purple-50 p-2 rounded">
             {penalties.map((penalty, index) => (
               <div key={index} className="flex justify-between items-center bg-white p-1 rounded mb-1 text-sm">
                 <span className="text-purple-600">{penalty}</span>
@@ -168,15 +176,15 @@ const MultiSpinWheelOfFortune = () => {
           </div>
         </div>
 
-        <div className="flex justify-center mb-4">
-          <div className="relative w-48 h-48 md:w-64 md:h-64">
+        <div className="flex justify-center mb-6">
+          <div className="relative w-64 h-64">
             <svg className="w-full h-full" viewBox="0 0 100 100" ref={wheelRef}>
               <g transform={`rotate(${rotationAngle}, 50, 50)`} style={{transition: 'transform 5s cubic-bezier(0.25, 0.1, 0.25, 1)'}}>
                 {remainingParticipants.map((participant, index) => {
                   const total = remainingParticipants.length;
                   const angle = (index * 360) / total;
                   const nextAngle = ((index + 1) * 360) / total;
-                  const textProps = calculateTextProps(index, total, penalties[index % penalties.length]);
+                  const textProps = calculateTextProps(index, total, participant);
                   return (
                     <g key={index}>
                       <path 
@@ -187,7 +195,7 @@ const MultiSpinWheelOfFortune = () => {
                         x={textProps.x} 
                         y={textProps.y} 
                         fill="white" 
-                        fontSize="3"
+                        fontSize={textProps.fontSize}
                         fontWeight="bold" 
                         textAnchor="middle"
                         dominantBaseline="middle"
@@ -211,7 +219,7 @@ const MultiSpinWheelOfFortune = () => {
           </div>
         </div>
 
-        <div className="mt-4 p-2 bg-gradient-to-r from-pink-200 to-purple-200 rounded-lg">
+        <div className="mt-4 p-4 bg-gradient-to-r from-pink-200 to-purple-200 rounded-lg">
           <h2 className="font-bold text-xl text-gray-800 mb-2 text-center">🏆 게임 결과 🏆</h2>
           {gameResults.map((result, index) => (
             <div key={index} className="mb-1 text-center text-sm">
