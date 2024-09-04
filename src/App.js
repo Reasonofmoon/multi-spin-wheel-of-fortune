@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, X, Volume2, User, Award, RefreshCw } from 'lucide-react';
+import { Plus, X, User, Award, RefreshCw } from 'lucide-react';
 
 const MultiSpinWheelOfFortune = () => {
   const [participants, setParticipants] = useState(() => {
@@ -14,7 +14,6 @@ const MultiSpinWheelOfFortune = () => {
   const [newPenalty, setNewPenalty] = useState('');
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotationAngle, setRotationAngle] = useState(0);
-  const [result, setResult] = useState(null);
   const [showFireworks, setShowFireworks] = useState(false);
   const [remainingParticipants, setRemainingParticipants] = useState([]);
   const [gameResults, setGameResults] = useState([]);
@@ -56,6 +55,11 @@ const MultiSpinWheelOfFortune = () => {
     return `hsl(${hue}, 70%, 50%)`;
   };
 
+  const getSelectedIndex = useCallback((angle) => {
+    const sectionAngle = 360 / remainingParticipants.length;
+    return Math.floor(((360 - angle + sectionAngle / 2) % 360) / sectionAngle);
+  }, [remainingParticipants.length]);
+
   const spinWheel = useCallback(() => {
     if (remainingParticipants.length > 0 && penalties.length > 0 && !isSpinning) {
       setIsSpinning(true);
@@ -71,7 +75,6 @@ const MultiSpinWheelOfFortune = () => {
         const selectedParticipant = remainingParticipants[selectedIndex];
         const selectedPenalty = penalties[selectedIndex % penalties.length];
         
-        setResult({ participant: selectedParticipant, penalty: selectedPenalty });
         setGameResults(prev => [...prev, { participant: selectedParticipant, penalty: selectedPenalty }]);
         setRemainingParticipants(prev => prev.filter(p => p !== selectedParticipant));
         
@@ -80,12 +83,7 @@ const MultiSpinWheelOfFortune = () => {
         setTimeout(() => setShowFireworks(false), 3000);
       }, 5000); // Match this with the CSS animation duration
     }
-  }, [remainingParticipants, penalties, isSpinning, rotationAngle]);
-
-  const getSelectedIndex = (angle) => {
-    const sectionAngle = 360 / remainingParticipants.length;
-    return Math.floor(((360 - angle + sectionAngle / 2) % 360) / sectionAngle);
-  };
+  }, [remainingParticipants, penalties, isSpinning, rotationAngle, getSelectedIndex]);
 
   const calculateTextProps = (index, total, text) => {
     const angle = ((index + 0.5) * (360 / total)) % 360;
@@ -105,7 +103,6 @@ const MultiSpinWheelOfFortune = () => {
   const resetGame = () => {
     setRemainingParticipants([...participants]);
     setGameResults([]);
-    setResult(null);
     setRotationAngle(0);
     setIsSpinning(false);
   };
