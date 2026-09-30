@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#14251f" />
+    <meta name="description" content="추첨 세션 로그를 오프라인에서 검증합니다." />
+    <title>추첨 검증 · 다중 회전 룰렛</title>
+  </head>
+  <body>
+    <main class="verify-page">
+      <a class="back-link" href="../">← 룰렛으로 돌아가기</a>
+      <header>
+        <p class="eyebrow">OFFLINE PROOF CHECK</p>
+        <h1>추첨 검증</h1>
+        <p>
+          내보낸 JSON 세션 로그를 이 기기에서 다시 계산합니다. 로그는 업로드되지 않습니다.
+        </p>
+      </header>
+      <label for="session-json">세션 로그 JSON</label>
+      <textarea
+        id="session-json"
+        spellcheck="false"
+        placeholder="JSON 로그를 붙여넣으세요"
+      ></textarea>
+      <div class="actions">
+        <label class="file-picker" for="session-file">파일 선택</label>
+        <input id="session-file" type="file" accept="application/json,.json" />
+        <button id="verify-button" type="button">검증하기</button>
+      </div>
+      <p id="summary" class="summary" role="status" aria-live="polite">
+        검증할 세션 로그를 입력해 주세요.
+      </p>
+      <ol id="draw-results" class="draw-results" aria-label="추첨별 검증 결과"></ol>
+    </main>
+    <script type="module" src="../src/verify-entry.ts"></script>
+  </body>
+</html>

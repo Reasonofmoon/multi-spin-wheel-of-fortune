@@ -1,0 +1,98 @@
+.page {
+  width: min(100% - 32px, 760px);
+  margin: 0 auto;
+  padding: 38px 0;
+}
+
+.page > a {
+  color: #355a47;
+  font-weight: 700;
+}
+
+.eyebrow {
+  margin: 40px 0 8px;
+  color: #5e796d;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+.page h1 {
+  margin: 0;
+  color: #172a22;
+  font-size: clamp(2rem, 7vw, 3rem);
+}
+
+.page > p:not(.eyebrow) {
+  color: #697871;
+  line-height: 1.65;
+}
+
+.page button {
+  display: block;
+  min-height: 48px;
+  margin: 14px auto 30px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 20px;
+  color: #fff;
+  background: #254d3a;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.page button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.page section {
+  border-radius: 16px;
+  padding: 18px;
+  background: #eaf0eb;
+}
+
+.page section h2 {
+  margin-top: 0;
+}
+
+.page dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.page dl div {
+  border-radius: 9px;
+  padding: 12px;
+  background: #fff;
+}
+
+.page dt {
+  color: #697871;
+  font-size: 0.82rem;
+}
+
+.page dd {
+  margin: 5px 0 0;
+  color: #254d3a;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.page textarea {
+  display: block;
+  width: 100%;
+  min-height: 120px;
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px solid #dce3dd;
+  border-radius: 9px;
+  background: #fff;
+  color: #202d29;
+  font:
+    0.78rem/1.5 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
