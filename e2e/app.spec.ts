@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 test('GitHub Pages base path serves the Korean app shell', async ({ page }) => {
   const errors: string[] = [];

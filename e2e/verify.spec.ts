@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 
 test('the standalone verifier route loads without the roulette app state', async ({
   page,
