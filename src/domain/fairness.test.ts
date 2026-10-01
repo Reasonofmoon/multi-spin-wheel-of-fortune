@@ -1,9 +1,12 @@
+// @vitest-environment node
 import { createHash, createHmac, webcrypto } from 'node:crypto';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   animationFractionFromHmac,
   createFairnessSession,
+  cryptographicId,
+  commitmentForSeed,
   createHmacSigner,
   drawSegment,
   sampleUnbiasedInteger,
@@ -42,15 +45,26 @@ async function countByWeights(
   drawCount: number,
 ): Promise<number[]> {
   const counts = Array.from({ length: weights.length }, () => 0);
-  const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+  const segments = weights.map((weight, index) => ({
+    id: `stat-${index}`,
+    label: '중복',
+    weight,
+  }));
   for (let nonce = 0; nonce < drawCount; nonce += 1) {
-    const message = `${fixedClientSeed}:${nonce}:statistical-wheel`;
-    const digest = await signer(message);
-    const value = await sampleUnbiasedInteger(digest, totalWeight, cryptoProvider);
+    const draw = await drawSegment(
+      segments,
+      signer,
+      fixedClientSeed,
+      nonce,
+      'statistical-wheel',
+      cryptoProvider,
+    );
+    const value = draw.randomValue;
     let cumulative = 0;
     for (let index = 0; index < weights.length; index += 1) {
       cumulative += weights[index]!;
       if (value < cumulative) {
+        expect(draw.segmentId).toBe(segments[index]!.id);
         counts[index] = counts[index]! + 1;
         break;
       }
@@ -82,6 +96,21 @@ describe('commit-reveal fairness protocol', () => {
     const defaultSeedSession = await createFairnessSession(undefined, cryptoProvider);
     expect(defaultSeedSession.clientSeed).toMatch(/^[0-9a-f]{64}$/);
     await expect(createFairnessSession('', cryptoProvider)).rejects.toThrow(RangeError);
+  });
+
+  it('creates UUID v4 identities and computes commitments independently', async () => {
+    const id = cryptographicId(cryptoProvider);
+    expect(id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(cryptographicId(cryptoProvider)).not.toBe(id);
+    await expect(commitmentForSeed(fixedServerSeed, cryptoProvider)).resolves.toBe(
+      createHash('sha256').update(Buffer.from(fixedServerSeed, 'hex')).digest('hex'),
+    );
+    await expect(commitmentForSeed('00', cryptoProvider)).rejects.toThrow(RangeError);
+    await expect(commitmentForSeed('invalid', cryptoProvider)).rejects.toThrow(
+      RangeError,
+    );
   });
 
   it('uses the specified HMAC-SHA256 message and returns a reproducible weighted draw', async () => {
@@ -127,7 +156,7 @@ describe('commit-reveal fairness protocol', () => {
           expect(value).toBeLessThan(totalWeight);
         },
       ),
-      { numRuns: 1_000 },
+      { numRuns: 1_000, seed: 20260930 },
     );
   });
 
@@ -147,6 +176,32 @@ describe('commit-reveal fairness protocol', () => {
     const value = await sampleUnbiasedInteger(rejectedMaximum, 3, cryptoProvider);
     expect(value).toBeGreaterThanOrEqual(0);
     expect(value).toBeLessThan(3);
+  });
+
+  it('rejects the incomplete upper residue range using real SHA-256 retry evidence', async () => {
+    let digestCalls = 0;
+    const measuredCrypto = {
+      getRandomValues: (bytes: Uint8Array) => cryptoProvider.getRandomValues(bytes),
+      subtle: {
+        importKey: cryptoProvider.subtle.importKey.bind(cryptoProvider.subtle),
+        sign: cryptoProvider.subtle.sign.bind(cryptoProvider.subtle),
+        digest: async (algorithm: 'SHA-256', data: ArrayBuffer) => {
+          digestCalls += 1;
+          return cryptoProvider.subtle.digest(algorithm, data);
+        },
+      },
+    };
+    const maximum = new Uint8Array(32).fill(255);
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(1n);
+    const retry = createHash('sha256').update(maximum).update(counter).digest('hex');
+    const expected = Number(BigInt(`0x${retry}`) % 3n);
+    expect(await sampleUnbiasedInteger(maximum, 3, measuredCrypto)).toBe(expected);
+    expect(digestCalls).toBe(1);
+    // This adapter counts delegated Web Crypto calls, not a mock of the sampler.
+    expect(await sampleUnbiasedInteger(maximum, 1, measuredCrypto)).toBe(0);
+    expect(digestCalls).toBe(1);
+    expect(() => animationFractionFromHmac('00'.repeat(31))).toThrow(RangeError);
   });
 
   it('rejects invalid ranges, digest lengths, and malformed seeds', async () => {
@@ -260,6 +315,30 @@ describe('commit-reveal fairness protocol', () => {
     );
     expect(badNonce.draws).toEqual([{ nonce: 1, passed: false }]);
 
+    const emptyClient = await verifySessionLog(
+      { ...log, clientSeed: '' },
+      cryptoProvider,
+    );
+    expect(emptyClient.validLog).toBe(false);
+    const duplicateNonce = await verifySessionLog(
+      { ...log, draws: [draw0, draw0] },
+      cryptoProvider,
+    );
+    expect(duplicateNonce.draws).toEqual([
+      { nonce: 0, passed: true },
+      { nonce: 0, passed: false },
+    ]);
+    const changedIdentity = await verifySessionLog(
+      { ...log, draws: [{ ...draw0, segmentId: 'not-the-winner' }] },
+      cryptoProvider,
+    );
+    expect(changedIdentity.draws[0]?.passed).toBe(false);
+    const changedMac = await verifySessionLog(
+      { ...log, draws: [{ ...draw0, hmac: '00'.repeat(32) }] },
+      cryptoProvider,
+    );
+    expect(changedMac.draws[0]?.passed).toBe(false);
+
     const malformedDraw = await verifySessionLog(
       { ...log, draws: ['not a draw'] },
       cryptoProvider,
@@ -276,6 +355,62 @@ describe('commit-reveal fairness protocol', () => {
       draws: [],
     });
   });
+
+  it('keeps participant and penalty streams statistically independent', async () => {
+    const signer = await createHmacSigner(fixedServerSeed, cryptoProvider);
+    const segments = Array.from({ length: 7 }, (_, i) => ({
+      id: `id-${i}`,
+      label: '동명이인',
+      weight: 1,
+    }));
+    const count = 20_000;
+    const joint = Array.from({ length: 7 }, () => Array<number>(7).fill(0));
+    const rows = Array<number>(7).fill(0);
+    const columns = Array<number>(7).fill(0);
+    for (let pair = 0; pair < count; pair += 1) {
+      const participant = await drawSegment(
+        segments,
+        signer,
+        fixedClientSeed,
+        pair * 2,
+        'participants',
+        cryptoProvider,
+      );
+      const penalty = await drawSegment(
+        segments,
+        signer,
+        fixedClientSeed,
+        pair * 2 + 1,
+        'penalties',
+        cryptoProvider,
+      );
+      expect(participant.hmac).not.toBe(penalty.hmac);
+      joint[participant.randomValue]![penalty.randomValue]! += 1;
+      rows[participant.randomValue]! += 1;
+      columns[penalty.randomValue]! += 1;
+    }
+    let chiSquare = 0;
+    for (let row = 0; row < 7; row += 1) {
+      for (let column = 0; column < 7; column += 1) {
+        const expected = (rows[row]! * columns[column]!) / count;
+        chiSquare += (joint[row]![column]! - expected) ** 2 / expected;
+      }
+    }
+    // Chi-square independence df=(7-1)*(7-1)=36; exact even-df survival function.
+    const half = chiSquare / 2;
+    let term = 1;
+    let sum = 1;
+    for (let k = 1; k < 18; k += 1) {
+      term *= half / k;
+      sum += term;
+    }
+    const p = Math.exp(-half) * sum;
+    console.info(
+      JSON.stringify({ pairDraws: count, independence: { chiSquare, p, joint } }),
+    );
+    expect(p).toBeGreaterThan(0.001);
+    expect(joint.every((row) => row.every((value) => value > 0))).toBe(true);
+  }, 120_000);
 
   it('passes deterministic chi-square tests for weighted and seven-equal-slice wheels', async () => {
     const signer = await createHmacSigner(fixedServerSeed, cryptoProvider);
