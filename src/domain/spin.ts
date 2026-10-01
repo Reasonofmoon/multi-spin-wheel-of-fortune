@@ -24,7 +24,7 @@ export function solveRestAngle(
   if (!Number.isFinite(fraction) || fraction < 0 || fraction > 1) {
     throw new RangeError('Offset fraction must be finite and in [0,1].');
   }
-  normalizeDegrees(pointerAngleDeg);
+  const pointer = normalizeDegrees(pointerAngleDeg);
 
   let cumulativeWeight = 0;
   let target: Segment | undefined;
@@ -41,7 +41,7 @@ export function solveRestAngle(
   const start = (360 * cumulativeWeight) / totalWeight;
   const margin = Math.min(2, width * 0.2);
   const localPointerAngle = start + margin + fraction * (width - 2 * margin);
-  return normalizeDegrees(pointerAngleDeg - localPointerAngle);
+  return normalizeDegrees(pointer - localPointerAngle);
 }
 
 /** Adds enough complete turns that the unwrapped wheel angle never moves backward. */
