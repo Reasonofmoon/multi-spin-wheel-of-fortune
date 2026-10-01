@@ -26,6 +26,27 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-undef': 'off',
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector:
+            "CallExpression[callee.object.name='Math'][callee.property.name='random']",
+          message: 'Use the Web Crypto fairness boundary, never Math.random.',
+        },
+        {
+          selector:
+            "CallExpression[callee.object.name='Math'][callee.property.value='random']",
+          message: 'Use the Web Crypto fairness boundary, never Math.random.',
+        },
+        {
+          selector: 'CallExpression[callee.property.name=/^(skip|only)$/]',
+          message: 'Do not weaken evaluation by skipping or focusing tests.',
+        },
+        {
+          selector: 'CallExpression[callee.name=/^(xit|xdescribe)$/]',
+          message: 'Disabled tests are not permitted.',
+        },
+      ],
     },
   },
 );

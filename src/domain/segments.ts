@@ -15,8 +15,11 @@ export function validateSegments(segments: readonly Segment[]): number {
   const ids = new Set<string>();
   let totalWeight = 0;
   for (const segment of segments) {
-    if (!segment.id.trim() || ids.has(segment.id)) {
+    if (typeof segment.id !== 'string' || !segment.id.trim() || ids.has(segment.id)) {
       throw new RangeError('Segment ids must be non-empty and unique.');
+    }
+    if (typeof segment.label !== 'string') {
+      throw new RangeError('Segment labels must be strings.');
     }
     if (
       !Number.isInteger(segment.weight) ||
@@ -57,21 +60,23 @@ export function segmentAtAngle(
   pointerAngleDeg: number,
 ): string {
   const totalWeight = validateSegments(segments);
-  const localAngle = normalizeDegrees(pointerAngleDeg - restAngleDeg);
-  const weightPosition = (localAngle * totalWeight) / 360;
-  // Account only for floating-point roundoff at a mathematically exact boundary.
-  const boundaryTolerance = Number.EPSILON * Math.max(1, totalWeight, weightPosition) * 8;
+  // Normalize separately: subtracting two finite extremes can overflow to Infinity.
+  const localAngle = normalizeDegrees(
+    normalizeDegrees(pointerAngleDeg) - normalizeDegrees(restAngleDeg),
+  );
   let cumulativeWeight = 0;
 
   for (const segment of segments) {
     cumulativeWeight += segment.weight;
-    if (weightPosition < cumulativeWeight - boundaryTolerance) {
+    // Compare angles, not a rounded weight coordinate or an epsilon-wide tie strip.
+    // Exactly represented ends are excluded; their following start is included.
+    if (localAngle < (360 * cumulativeWeight) / totalWeight) {
       return segment.id;
     }
   }
 
-  // Rounding can make an angle just below 360° equal W in weight coordinates.
-  return segments[segments.length - 1]!.id;
+  // The final end is exactly 360, and normalizeDegrees always returns less than 360.
+  throw new RangeError('Normalized angle did not map to a segment.');
 }
 
 export function segmentForWeightValue(
