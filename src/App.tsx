@@ -4,6 +4,7 @@ import {
   animationFractionFromHmac,
   createFairnessSession,
   createHmacSigner,
+  cryptographicId,
   drawSegment,
   type FairnessSession,
 } from './domain/fairness';
@@ -17,6 +18,8 @@ type GameResult = Readonly<{
   participantId: string;
   participant: string;
   penalty: string;
+  penaltyId: string;
+  nonce: number;
 }>;
 
 function readLegacyList(key: LegacyKey): string[] {
@@ -33,9 +36,9 @@ function readLegacyList(key: LegacyKey): string[] {
   }
 }
 
-function toSegments(labels: readonly string[], prefix: string): Segment[] {
-  return labels.map((label, index) => ({
-    id: `${prefix}-${index}`,
+function toSegments(labels: readonly string[]): Segment[] {
+  return labels.map((label) => ({
+    id: cryptographicId(),
     label,
     weight: 1,
   }));
@@ -50,10 +53,15 @@ function persistLegacyList(key: LegacyKey, list: string[]): void {
 }
 
 export default function App() {
-  const [participants, setParticipants] = useState<string[]>(() =>
-    readLegacyList('participants'),
+  const [participants, setParticipants] = useState<Segment[]>(() =>
+    toSegments(readLegacyList('participants')),
   );
-  const [penalties, setPenalties] = useState<string[]>(() => readLegacyList('penalties'));
+  const [penalties, setPenalties] = useState<Segment[]>(() =>
+    toSegments(readLegacyList('penalties')),
+  );
+  const [eliminatedIds, setEliminatedIds] = useState<readonly string[]>([]);
+  const lastPersistedParticipants = useRef(participants);
+  const lastPersistedPenalties = useRef(penalties);
   const [participantInput, setParticipantInput] = useState('');
   const [penaltyInput, setPenaltyInput] = useState('');
   const [fairnessSession, setFairnessSession] = useState<FairnessSession | null>(null);
@@ -62,8 +70,13 @@ export default function App() {
   const [sessionEnded, setSessionEnded] = useState(false);
   const [fairnessError, setFairnessError] = useState('');
   const [isCreatingSession, setIsCreatingSession] = useState(false);
+  const sessionCreationRef = useRef(false);
   const [rotationDeg, setRotationDeg] = useState(0);
   const rotationRef = useRef(0);
+  const penaltyRotationRef = useRef(0);
+  const [penaltyRotationDeg, setPenaltyRotationDeg] = useState(0);
+  const penaltyCanvasRef = useRef<WheelCanvasHandle>(null);
+  const mountedRef = useRef(true);
   const wheelCanvasRef = useRef<WheelCanvasHandle>(null);
   const animationFrameRef = useRef<number | null>(null);
   const spinInFlightRef = useRef(false);
@@ -74,10 +87,10 @@ export default function App() {
   const [transitionProgress, setTransitionProgress] = useState(1);
   const [spinError, setSpinError] = useState('');
   const wheelSegments = useMemo(
-    () => toSegments(participants, 'participant'),
-    [participants],
+    () => participants.filter((entry) => !eliminatedIds.includes(entry.id)).slice(0, 500),
+    [participants, eliminatedIds],
   );
-  const penaltySegments = useMemo(() => toSegments(penalties, 'penalty'), [penalties]);
+  const penaltySegments = useMemo(() => penalties.slice(0, 500), [penalties]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,47 +109,71 @@ export default function App() {
     };
   }, []);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
       if (animationFrameRef.current !== null)
         cancelAnimationFrame(animationFrameRef.current);
-    },
-    [],
-  );
+    };
+  }, []);
 
-  useEffect(() => persistLegacyList('participants', participants), [participants]);
-  useEffect(() => persistLegacyList('penalties', penalties), [penalties]);
+  // Until versioned migration in M4, never overwrite legacy bytes on mount, nor
+  // mutate the persisted base roster merely because a round eliminates an entry.
+  useEffect(() => {
+    if (participants !== lastPersistedParticipants.current) {
+      persistLegacyList(
+        'participants',
+        participants.map((entry) => entry.label),
+      );
+      lastPersistedParticipants.current = participants;
+    }
+  }, [participants]);
+  useEffect(() => {
+    if (penalties !== lastPersistedPenalties.current) {
+      persistLegacyList(
+        'penalties',
+        penalties.map((entry) => entry.label),
+      );
+      lastPersistedPenalties.current = penalties;
+    }
+  }, [penalties]);
 
   async function beginNewSession(): Promise<void> {
-    if (spinInFlightRef.current || isCreatingSession || !fairnessSession) return;
+    if (spinInFlightRef.current || sessionCreationRef.current || !fairnessSession) return;
     if (drawNonce > 0 && !sessionEnded) {
       setFairnessError(
         '새 세션을 시작하기 전에 현재 세션을 종료하고 서버 시드를 공개해 주세요.',
       );
       return;
     }
+    sessionCreationRef.current = true;
     setFairnessError('');
     setIsCreatingSession(true);
     try {
       const session = await createFairnessSession(
         clientSeed === '' ? undefined : clientSeed,
       );
+      if (!mountedRef.current) return;
       setFairnessSession(session);
       setClientSeed(session.clientSeed);
       setRevealedServerSeed(null);
       setSessionEnded(false);
       setDrawNonce(0);
+      setEliminatedIds([]);
+      setResults([]);
     } catch {
       setFairnessError(
         '세션을 시작할 수 없습니다. 페이지를 새로고침해 다시 시도해 주세요.',
       );
     } finally {
-      setIsCreatingSession(false);
+      sessionCreationRef.current = false;
+      if (mountedRef.current) setIsCreatingSession(false);
     }
   }
 
   function revealServerSeed(): void {
-    if (!fairnessSession) return;
+    if (!fairnessSession || spinInFlightRef.current || sessionCreationRef.current) return;
     setRevealedServerSeed(fairnessSession.serverSeed);
     setSessionEnded(true);
   }
@@ -144,11 +181,13 @@ export default function App() {
   async function spinWheel(): Promise<void> {
     if (
       spinInFlightRef.current ||
-      isCreatingSession ||
+      sessionCreationRef.current ||
       !fairnessSession ||
       sessionEnded ||
       wheelSegments.length === 0 ||
-      penaltySegments.length === 0
+      penaltySegments.length === 0 ||
+      participants.length > 500 ||
+      penalties.length > 500
     ) {
       return;
     }
@@ -162,12 +201,12 @@ export default function App() {
         drawSegment(wheelSegments, signer, clientSeed, drawNonce, 'participants'),
         drawSegment(penaltySegments, signer, clientSeed, drawNonce + 1, 'penalties'),
       ]);
+      if (!mountedRef.current) return;
       setDrawNonce((nonce) => nonce + 2);
 
-      const selectedIndex = wheelSegments.findIndex(
+      const selectedParticipant = wheelSegments.find(
         (segment) => segment.id === participantDraw.segmentId,
       );
-      const selectedParticipant = wheelSegments[selectedIndex];
       const selectedPenalty = penaltySegments.find(
         (segment) => segment.id === penaltyDraw.segmentId,
       );
@@ -181,60 +220,44 @@ export default function App() {
         270,
         animationFractionFromHmac(participantDraw.hmac),
       );
+      const penaltyRest = solveRestAngle(
+        penaltySegments,
+        penaltyDraw.segmentId,
+        270,
+        animationFractionFromHmac(penaltyDraw.hmac),
+      );
+      const penaltyStart = penaltyRotationRef.current;
+      const penaltyTarget = targetRotationAtRest(penaltyStart, penaltyRest, 5);
       const startRotation = rotationRef.current;
       const targetRotation = targetRotationAtRest(startRotation, restAngle, 5);
       const reducedMotion =
         window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-      const nextParticipants = participants.filter((_, index) => index !== selectedIndex);
       const result = {
         participantId: selectedParticipant.id,
         participant: selectedParticipant.label,
         penalty: selectedPenalty.label,
+        penaltyId: selectedPenalty.id,
+        nonce: drawNonce,
       };
 
-      const completeImmediately = (): void => {
+      const land = (): void => {
         rotationRef.current = targetRotation;
+        penaltyRotationRef.current = penaltyTarget;
         setRotationDeg(targetRotation);
+        setPenaltyRotationDeg(penaltyTarget);
         setResults((current) => [...current, result]);
-        setParticipants(nextParticipants);
-        setPreviousWheel(null);
-        setTransitionProgress(1);
-        setIsSpinning(false);
-        spinInFlightRef.current = false;
-        animationFrameRef.current = null;
-      };
-
-      if (reducedMotion) {
-        completeImmediately();
-        return;
-      }
-
-      let spinStartedAt: number | null = null;
-      const spinFrame = (timestamp: number): void => {
-        if (spinStartedAt === null) spinStartedAt = timestamp;
-        const progress = Math.min(1, (timestamp - spinStartedAt) / 5_000);
-        const angle = rotationAtProgress(startRotation, targetRotation, progress);
-        rotationRef.current = angle;
-        wheelCanvasRef.current?.drawAtRotation(angle);
-
-        if (progress < 1) {
-          animationFrameRef.current = requestAnimationFrame(spinFrame);
-          return;
-        }
-
-        rotationRef.current = targetRotation;
-        setRotationDeg(targetRotation);
         setPreviousWheel(wheelSegments);
-        setParticipants(nextParticipants);
+        setEliminatedIds((ids) => [...ids, selectedParticipant.id]);
         setTransitionProgress(0);
-        setResults((current) => [...current, result]);
 
         let transitionStartedAt: number | null = null;
         const reflowFrame = (frameTime: number): void => {
           if (transitionStartedAt === null) transitionStartedAt = frameTime;
-          // Hold the committed winning slice briefly, then crossfade the intentional reflow.
-          const reflowElapsed = frameTime - transitionStartedAt - 160;
-          const reflowProgress = Math.min(1, Math.max(0, reflowElapsed / 320));
+          // The winning snapshot is readable before an intentional crossfade.
+          const holdMs = reducedMotion ? 200 : 600;
+          const fadeMs = reducedMotion ? 50 : 320;
+          const reflowElapsed = frameTime - transitionStartedAt - holdMs;
+          const reflowProgress = Math.min(1, Math.max(0, reflowElapsed / fadeMs));
           wheelCanvasRef.current?.drawAtRotation(targetRotation, reflowProgress);
           if (reflowProgress < 1) {
             animationFrameRef.current = requestAnimationFrame(reflowFrame);
@@ -248,8 +271,35 @@ export default function App() {
         };
         animationFrameRef.current = requestAnimationFrame(reflowFrame);
       };
+
+      if (reducedMotion) {
+        wheelCanvasRef.current?.drawAtRotation(targetRotation);
+        penaltyCanvasRef.current?.drawAtRotation(penaltyTarget);
+        land();
+        return;
+      }
+
+      let spinStartedAt: number | null = null;
+      const spinFrame = (timestamp: number): void => {
+        if (spinStartedAt === null) spinStartedAt = timestamp;
+        const progress = Math.min(1, (timestamp - spinStartedAt) / 3_200);
+        const angle = rotationAtProgress(startRotation, targetRotation, progress);
+        rotationRef.current = angle;
+        wheelCanvasRef.current?.drawAtRotation(angle);
+        const penaltyAngle = rotationAtProgress(penaltyStart, penaltyTarget, progress);
+        penaltyRotationRef.current = penaltyAngle;
+        penaltyCanvasRef.current?.drawAtRotation(penaltyAngle);
+
+        if (progress < 1) {
+          animationFrameRef.current = requestAnimationFrame(spinFrame);
+          return;
+        }
+
+        land();
+      };
       animationFrameRef.current = requestAnimationFrame(spinFrame);
     } catch {
+      if (!mountedRef.current) return;
       setSpinError(
         '추첨을 완료할 수 없습니다. 세션 시드와 브라우저 암호화 기능을 확인해 주세요.',
       );
@@ -261,15 +311,17 @@ export default function App() {
 
   function addItem(event: FormEvent<HTMLFormElement>, kind: LegacyKey): void {
     event.preventDefault();
+    if (spinInFlightRef.current) return;
+    if ((kind === 'participants' ? participants : penalties).length >= 500) return;
     const input = kind === 'participants' ? participantInput : penaltyInput;
     const label = input.trim();
     if (!label) return;
 
     if (kind === 'participants') {
-      setParticipants((items) => [...items, label]);
+      setParticipants((items) => [...items, { id: cryptographicId(), label, weight: 1 }]);
       setParticipantInput('');
     } else {
-      setPenalties((items) => [...items, label]);
+      setPenalties((items) => [...items, { id: cryptographicId(), label, weight: 1 }]);
       setPenaltyInput('');
     }
   }
@@ -300,8 +352,17 @@ export default function App() {
           id="client-seed"
           className={styles.seedInput}
           value={clientSeed}
-          onChange={(event) => setClientSeed(event.currentTarget.value)}
-          disabled={!fairnessSession || sessionEnded || isSpinning || isCreatingSession}
+          onChange={(event) => {
+            if (!spinInFlightRef.current && drawNonce === 0)
+              setClientSeed(event.currentTarget.value);
+          }}
+          disabled={
+            !fairnessSession ||
+            sessionEnded ||
+            isSpinning ||
+            isCreatingSession ||
+            drawNonce > 0
+          }
           autoComplete="off"
         />
         <div className={styles.sessionActions}>
@@ -341,9 +402,10 @@ export default function App() {
           disabled={isSpinning}
           items={participants}
           onSubmit={(event) => addItem(event, 'participants')}
-          onRemove={(index) =>
-            setParticipants((items) => items.filter((_, i) => i !== index))
-          }
+          onRemove={(id) => {
+            if (!spinInFlightRef.current)
+              setParticipants((items) => items.filter((entry) => entry.id !== id));
+          }}
           accent="green"
         />
         <RosterEditor
@@ -354,28 +416,44 @@ export default function App() {
           disabled={isSpinning}
           items={penalties}
           onSubmit={(event) => addItem(event, 'penalties')}
-          onRemove={(index) =>
-            setPenalties((items) => items.filter((_, i) => i !== index))
-          }
+          onRemove={(id) => {
+            if (!spinInFlightRef.current)
+              setPenalties((items) => items.filter((entry) => entry.id !== id));
+          }}
           accent="orange"
         />
       </section>
 
       <section className={styles.wheelPanel} aria-labelledby="wheel-title">
         <h2 id="wheel-title">추첨 휠</h2>
-        {wheelSegments.length > 0 || previousWheel ? (
-          <WheelCanvas
-            ref={wheelCanvasRef}
-            segments={wheelSegments}
-            rotationDeg={rotationDeg}
-            previousSegments={previousWheel}
-            transitionProgress={transitionProgress}
-          />
-        ) : (
-          <p className={styles.wheelEmpty}>참가자를 추가하면 휠이 준비됩니다.</p>
+        <div className={styles.wheels}>
+          {wheelSegments.length > 0 || previousWheel ? (
+            <WheelCanvas
+              ref={wheelCanvasRef}
+              segments={wheelSegments}
+              rotationDeg={rotationDeg}
+              previousSegments={previousWheel}
+              transitionProgress={transitionProgress}
+            />
+          ) : (
+            <p className={styles.wheelEmpty}>참가자를 추가하면 휠이 준비됩니다.</p>
+          )}
+          {penaltySegments.length > 0 && (
+            <WheelCanvas
+              ref={penaltyCanvasRef}
+              segments={penaltySegments}
+              rotationDeg={penaltyRotationDeg}
+              label="벌칙 룰렛"
+            />
+          )}
+        </div>
+        {(participants.length > 500 || penalties.length > 500) && (
+          <p role="alert">
+            모든 기존 항목을 보존했습니다. 휠당 500개 이하로 편집한 뒤 추첨해 주세요.
+          </p>
         )}
         <p className={styles.count}>
-          참가자 {participants.length}명 <span aria-hidden="true">·</span> 항목{' '}
+          참가자 {wheelSegments.length}명 <span aria-hidden="true">·</span> 항목{' '}
           {penalties.length}개
         </p>
         <button
@@ -384,10 +462,13 @@ export default function App() {
           onClick={() => void spinWheel()}
           disabled={
             isSpinning ||
+            isCreatingSession ||
             !fairnessSession ||
             sessionEnded ||
-            participants.length === 0 ||
-            penalties.length === 0
+            wheelSegments.length === 0 ||
+            penalties.length === 0 ||
+            participants.length > 500 ||
+            penalties.length > 500
           }
         >
           {isSpinning ? '추첨 및 결과 정리 중…' : '룰렛 돌리기'}
@@ -400,6 +481,8 @@ export default function App() {
           role="status"
           aria-live="polite"
           data-result-participant-id={results.at(-1)?.participantId ?? ''}
+          data-result-penalty-id={results.at(-1)?.penaltyId ?? ''}
+          data-draw-nonce={drawNonce}
         >
           {results.length > 0
             ? `결과: ${results.at(-1)!.participant} — 벌칙: ${results.at(-1)!.penalty}`
@@ -433,9 +516,9 @@ type RosterEditorProps = {
   value: string;
   onChange: (value: string) => void;
   disabled: boolean;
-  items: string[];
+  items: readonly Segment[];
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  onRemove: (index: number) => void;
+  onRemove: (id: string) => void;
   accent: 'green' | 'orange';
 };
 
@@ -466,22 +549,26 @@ function RosterEditor({
           onChange={(event) => onChange(event.currentTarget.value)}
           placeholder={hint}
           autoComplete="off"
-          disabled={disabled}
+          disabled={disabled || items.length >= 500}
         />
-        <button type="submit" aria-label={`${title} 추가`} disabled={disabled}>
+        <button
+          type="submit"
+          aria-label={`${title} 추가`}
+          disabled={disabled || items.length >= 500}
+        >
           추가
         </button>
       </form>
       <ul className={styles.list}>
-        {items.map((item, index) => (
-          <li className={styles.listItem} key={`${item}-${index}`}>
-            <span>{item}</span>
+        {items.map((item) => (
+          <li className={styles.listItem} key={item.id}>
+            <span>{item.label}</span>
             <button
               type="button"
               className={styles.remove}
-              aria-label={`${item} 삭제`}
+              aria-label={`${item.label} 삭제`}
               disabled={disabled}
-              onClick={() => onRemove(index)}
+              onClick={() => onRemove(item.id)}
             >
               삭제
             </button>

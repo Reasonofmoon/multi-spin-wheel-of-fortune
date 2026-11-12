@@ -39,6 +39,18 @@ describe('wheel palette', () => {
     }
   });
 
+  it('keeps the seam and every adjacent pair distinct at every supported wheel size', () => {
+    for (let count = 2; count <= 500; count += 1) {
+      const colors = wheelPalette(count);
+      for (let i = 0; i < count; i += 1) {
+        expect(
+          perceptualDistance(colors[i]!, colors[(i + 1) % count]!),
+          `N=${count}, seam=${i === count - 1}`,
+        ).toBeGreaterThanOrEqual(0.19);
+      }
+    }
+  });
+
   it('rejects palette sizes outside the supported wheel range', () => {
     expect(() => wheelPalette(0)).toThrow(RangeError);
     expect(() => wheelPalette(501)).toThrow(RangeError);

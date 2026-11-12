@@ -6,6 +6,11 @@ export default defineConfig({
   // GitHub Pages project sites are served from this repository subpath.
   base: '/multi-spin-wheel-of-fortune/',
   server: {
+    host: '0.0.0.0',
+    allowedHosts: true,
+  },
+  preview: {
+    host: '0.0.0.0',
     allowedHosts: true,
   },
   plugins: [react()],

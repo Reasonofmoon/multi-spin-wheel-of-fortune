@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import WheelCanvas, { type WheelCanvasHandle } from './ui/WheelCanvas';
 import type { Segment } from './domain/segments';
 import styles from './PerfHarness.module.css';
@@ -10,6 +10,9 @@ type PerfResult = Readonly<{
   p95Ms: number;
   framesAtOrUnder16_7Ms: number;
   frameTimes: readonly number[];
+  drawTimes: readonly number[];
+  p95DrawMs: number;
+  devicePixelRatio: number;
 }>;
 
 function percentile(sorted: readonly number[], fraction: number): number {
@@ -29,6 +32,14 @@ export default function PerfHarness() {
   );
   const wheelRef = useRef<WheelCanvasHandle>(null);
   const activeRef = useRef(false);
+  const frameRef = useRef<number | null>(null);
+  const accumulatedAngle = useRef(0);
+  useEffect(
+    () => () => {
+      if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<PerfResult | null>(null);
 
@@ -38,6 +49,8 @@ export default function PerfHarness() {
     setRunning(true);
     setResult(null);
     const frameTimes: number[] = [];
+    const drawTimes: number[] = [];
+    const startAngle = accumulatedAngle.current;
     let startedAt: number | null = null;
     let lastFrameAt: number | null = null;
 
@@ -47,10 +60,13 @@ export default function PerfHarness() {
       lastFrameAt = timestamp;
       const progress = Math.min(1, (timestamp - startedAt) / 5_000);
       const eased = 1 - (1 - progress) ** 2;
-      wheelRef.current?.drawAtRotation(1_800 * eased);
+      const drawingStarted = performance.now();
+      accumulatedAngle.current = startAngle + 1_800 * eased;
+      wheelRef.current?.drawAtRotation(accumulatedAngle.current);
+      drawTimes.push(performance.now() - drawingStarted);
 
       if (progress < 1) {
-        requestAnimationFrame(frame);
+        frameRef.current = requestAnimationFrame(frame);
         return;
       }
 
@@ -62,11 +78,17 @@ export default function PerfHarness() {
         p95Ms: percentile(sorted, 0.95),
         framesAtOrUnder16_7Ms: frameTimes.filter((value) => value <= 16.7).length,
         frameTimes,
+        drawTimes,
+        p95DrawMs: percentile(
+          [...drawTimes].sort((a, b) => a - b),
+          0.95,
+        ),
+        devicePixelRatio: window.devicePixelRatio,
       });
       activeRef.current = false;
       setRunning(false);
     };
-    requestAnimationFrame(frame);
+    frameRef.current = requestAnimationFrame(frame);
   }
 
   return (
@@ -82,7 +104,11 @@ export default function PerfHarness() {
         {running ? '측정 중…' : '5초 성능 측정 시작'}
       </button>
       {result && (
-        <section aria-live="polite" aria-labelledby="result-title">
+        <section
+          aria-live="polite"
+          aria-labelledby="result-title"
+          data-perf-result={JSON.stringify(result)}
+        >
           <h2 id="result-title">측정 결과</h2>
           <dl>
             <div>
@@ -100,6 +126,10 @@ export default function PerfHarness() {
             <div>
               <dt>95백분위 간격</dt>
               <dd>{result.p95Ms.toFixed(2)} ms</dd>
+            </div>
+            <div>
+              <dt>95백분위 그리기 시간</dt>
+              <dd>{result.p95DrawMs.toFixed(2)} ms</dd>
             </div>
             <div>
               <dt>16.7ms 이하 비율</dt>

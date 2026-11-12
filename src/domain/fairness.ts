@@ -6,7 +6,7 @@ const DIGEST_BITS = BigInt(SEED_BYTES * 8);
 const DIGEST_SPACE = 1n << DIGEST_BITS;
 const encoder = new TextEncoder();
 
-type CryptoProvider = {
+export type CryptoProvider = {
   getRandomValues(array: Uint8Array): Uint8Array;
   subtle: {
     digest(algorithm: 'SHA-256', data: ArrayBuffer): Promise<ArrayBuffer>;
@@ -113,6 +113,29 @@ function validateTotalWeight(totalWeight: number): void {
   ) {
     throw new RangeError(`Total weight must be an integer in [1, ${MAX_TOTAL_WEIGHT}].`);
   }
+}
+
+/** Stable entry/session identity; randomness is centralized with the fairness boundary. */
+export function cryptographicId(
+  cryptoProvider: CryptoProvider = globalThis.crypto,
+): string {
+  const bytes = cryptoProvider.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytesToHex(bytes);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export async function commitmentForSeed(
+  serverSeed: string,
+  cryptoProvider: CryptoProvider = globalThis.crypto,
+): Promise<string> {
+  const bytes = hexToBytes(serverSeed);
+  if (bytes.length !== SEED_BYTES)
+    throw new RangeError('Server seed must contain 32 bytes.');
+  return bytesToHex(
+    new Uint8Array(await cryptoProvider.subtle.digest('SHA-256', arrayBuffer(bytes))),
+  );
 }
 
 export async function createFairnessSession(
@@ -250,6 +273,7 @@ export async function verifySessionLog(
     candidate.version !== 1 ||
     typeof candidate.commitment !== 'string' ||
     typeof candidate.clientSeed !== 'string' ||
+    candidate.clientSeed.length === 0 ||
     typeof candidate.serverSeed !== 'string' ||
     !Array.isArray(candidate.draws)
   ) {

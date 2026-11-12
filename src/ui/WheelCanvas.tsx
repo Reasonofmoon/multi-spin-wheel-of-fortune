@@ -11,21 +11,16 @@ import { wheelPalette, type WheelColor } from './wheel-palette';
 import { splitGraphemes } from './grapheme';
 import styles from './WheelCanvas.module.css';
 
-type LabelLayout = Readonly<{
-  text: string;
-  fontSize: number;
-  midpoint: number;
-}>;
-
 type WheelLayout = Readonly<{
   segments: readonly Segment[];
   palette: readonly WheelColor[];
-  labels: readonly LabelLayout[];
+  bitmap: HTMLCanvasElement | null;
 }>;
 
 type WheelCanvasProps = Readonly<{
   segments: readonly Segment[];
   rotationDeg: number;
+  label?: string;
   previousSegments?: readonly Segment[] | null;
   transitionProgress?: number;
 }>;
@@ -61,35 +56,63 @@ function prepareLayout(
   segments: readonly Segment[],
   size: number,
   measurementContext: CanvasRenderingContext2D | null,
+  pixelRatio: number,
 ): WheelLayout {
   const palette = segments.length > 0 ? wheelPalette(segments.length) : [];
-  const totalWeight = segments.reduce((total, segment) => total + segment.weight, 0);
-  const labels: LabelLayout[] = [];
-  if (measurementContext) {
-    let cumulativeWeight = 0;
-    const labelRadius = size * 0.46 * 0.62;
-    for (const segment of segments) {
-      const start = (2 * Math.PI * cumulativeWeight) / totalWeight;
-      cumulativeWeight += segment.weight;
-      const end = (2 * Math.PI * cumulativeWeight) / totalWeight;
-      const midpoint = (start + end) / 2;
-      const fitted = fitLabel(
-        measurementContext,
-        segment.label,
-        labelRadius * (end - start),
-      );
-      labels.push({
-        text: fitted?.text ?? '',
-        fontSize: fitted?.fontSize ?? 0,
-        midpoint,
-      });
-    }
-  } else {
-    for (let index = 0; index < segments.length; index += 1) {
-      labels.push({ text: '', fontSize: 0, midpoint: 0 });
-    }
+  if (!measurementContext || segments.length === 0) {
+    return { segments, palette, bitmap: null };
   }
-  return { segments, palette, labels };
+  const bitmap = document.createElement('canvas');
+  bitmap.width = Math.round(size * pixelRatio);
+  bitmap.height = bitmap.width;
+  const context = bitmap.getContext('2d');
+  if (!context) return { segments, palette, bitmap: null };
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  const totalWeight = segments.reduce((total, segment) => total + segment.weight, 0);
+  const center = size / 2;
+  const radius = size * 0.46;
+  let prefix = 0;
+  for (const [index, segment] of segments.entries()) {
+    const start = (2 * Math.PI * prefix) / totalWeight;
+    prefix += segment.weight;
+    const end = (2 * Math.PI * prefix) / totalWeight;
+    const color = palette[index]!;
+    context.beginPath();
+    context.moveTo(center, center);
+    context.arc(center, center, radius, start, end, false);
+    context.closePath();
+    context.fillStyle = color.fill;
+    context.fill();
+    context.strokeStyle = '#ffffff';
+    context.lineWidth = 0.6;
+    context.stroke();
+
+    const labelRadius = radius * 0.62;
+    const label = fitLabel(
+      measurementContext,
+      segment.label,
+      Math.min(labelRadius * (end - start), radius * 0.65),
+    );
+    if (!label) continue;
+    const midpoint = (start + end) / 2;
+    context.save();
+    context.translate(
+      center + Math.cos(midpoint) * labelRadius,
+      center + Math.sin(midpoint) * labelRadius,
+    );
+    context.rotate(
+      midpoint > Math.PI / 2 && midpoint < (3 * Math.PI) / 2
+        ? midpoint + Math.PI
+        : midpoint,
+    );
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.font = `600 ${label.fontSize}px "Noto Sans KR", sans-serif`;
+    context.fillStyle = color.text;
+    context.fillText(label.text, 0, 0);
+    context.restore();
+  }
+  return { segments, palette, bitmap };
 }
 
 function drawWheelLayer(
@@ -99,65 +122,24 @@ function drawWheelLayer(
   rotationDeg: number,
   opacity: number,
 ): void {
-  if (layout.segments.length === 0) return;
-  const center = size / 2;
-  const radius = size * 0.46;
-  const rotation = ((rotationDeg % 360) * Math.PI) / 180;
-  const totalWeight = layout.segments.reduce(
-    (total, segment) => total + segment.weight,
-    0,
-  );
-  let cumulativeWeight = 0;
+  if (!layout.bitmap || opacity === 0) return;
+  // Rasterize all 500 paths/labels only when layout, size, or DPR changes. A spin
+  // frame is one rotated bitmap blit per layer, independent of the segment count.
+  context.save();
   context.globalAlpha = opacity;
-
-  for (let index = 0; index < layout.segments.length; index += 1) {
-    const segment = layout.segments[index]!;
-    const start = (2 * Math.PI * cumulativeWeight) / totalWeight + rotation;
-    cumulativeWeight += segment.weight;
-    const end = (2 * Math.PI * cumulativeWeight) / totalWeight + rotation;
-    const color = layout.palette[index]!;
-
-    context.beginPath();
-    context.moveTo(center, center);
-    context.arc(center, center, radius, start, end, false);
-    context.closePath();
-    context.fillStyle = color.fill;
-    context.fill();
-    context.strokeStyle = '#ffffff';
-    context.lineWidth = 1;
-    context.stroke();
-
-    const label = layout.labels[index]!;
-    if (!label.text) continue;
-    let textRotation = (label.midpoint + rotation) % (2 * Math.PI);
-    if (textRotation < 0) textRotation += 2 * Math.PI;
-    if (textRotation > Math.PI / 2 && textRotation < (3 * Math.PI) / 2) {
-      textRotation += Math.PI;
-    }
-    const labelRadius = radius * 0.62;
-    context.save();
-    context.translate(
-      center + Math.cos(label.midpoint + rotation) * labelRadius,
-      center + Math.sin(label.midpoint + rotation) * labelRadius,
-    );
-    context.rotate(textRotation);
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.font = `600 ${label.fontSize}px "Noto Sans KR", sans-serif`;
-    context.fillStyle = color.text;
-    context.fillText(label.text, 0, 0);
-    context.restore();
-  }
-  context.globalAlpha = 1;
+  context.translate(size / 2, size / 2);
+  context.rotate(((rotationDeg % 360) * Math.PI) / 180);
+  context.drawImage(layout.bitmap, -size / 2, -size / 2, size, size);
+  context.restore();
 }
 
 function drawPointer(context: CanvasRenderingContext2D, size: number): void {
   const center = size / 2;
-  const tipY = size * 0.055;
+  const tipY = size * 0.15;
   context.beginPath();
   context.moveTo(center, tipY);
-  context.lineTo(center - size * 0.034, size * 0.145);
-  context.lineTo(center + size * 0.034, size * 0.145);
+  context.lineTo(center - size * 0.034, size * 0.025);
+  context.lineTo(center + size * 0.034, size * 0.025);
   context.closePath();
   context.fillStyle = '#15251e';
   context.strokeStyle = '#ffffff';
@@ -205,7 +187,13 @@ function renderCanvasFrame(
 }
 
 const WheelCanvas = forwardRef<WheelCanvasHandle, WheelCanvasProps>(function WheelCanvas(
-  { segments, rotationDeg, previousSegments = null, transitionProgress = 1 },
+  {
+    segments,
+    rotationDeg,
+    label = '참가자 룰렛',
+    previousSegments = null,
+    transitionProgress = 1,
+  },
   ref,
 ) {
   const stageRef = useRef<HTMLDivElement>(null);
@@ -214,6 +202,9 @@ const WheelCanvas = forwardRef<WheelCanvasHandle, WheelCanvasProps>(function Whe
     null,
   );
   const [size, setSize] = useState(320);
+  const [pixelRatio, setPixelRatio] = useState(() =>
+    Math.max(1, window.devicePixelRatio || 1),
+  );
   const measurementCanvas = useMemo(() => document.createElement('canvas'), []);
   const measurementContext = useMemo(
     () =>
@@ -223,13 +214,15 @@ const WheelCanvas = forwardRef<WheelCanvasHandle, WheelCanvasProps>(function Whe
     [measurementCanvas],
   );
   const currentLayout = useMemo(
-    () => prepareLayout(segments, size, measurementContext),
-    [measurementContext, segments, size],
+    () => prepareLayout(segments, size, measurementContext, pixelRatio),
+    [measurementContext, segments, size, pixelRatio],
   );
   const previousLayout = useMemo(
     () =>
-      previousSegments ? prepareLayout(previousSegments, size, measurementContext) : null,
-    [measurementContext, previousSegments, size],
+      previousSegments
+        ? prepareLayout(previousSegments, size, measurementContext, pixelRatio)
+        : null,
+    [measurementContext, previousSegments, size, pixelRatio],
   );
   const renderState = useRef({
     size,
@@ -308,6 +301,7 @@ const WheelCanvas = forwardRef<WheelCanvasHandle, WheelCanvasProps>(function Whe
       if (width > 0) setSize(Math.min(560, width));
     }
     const resize = (): void => {
+      setPixelRatio(Math.max(1, window.devicePixelRatio || 1));
       const state = renderState.current;
       drawFrameRef.current?.(state.rotationDeg, state.transitionProgress);
     };
@@ -351,7 +345,7 @@ const WheelCanvas = forwardRef<WheelCanvasHandle, WheelCanvasProps>(function Whe
         data-transition-progress={transitionProgress}
         data-wheel-segments={currentGeometry}
         data-previous-segments={previousGeometry}
-        aria-label={`참가자 룰렛: ${segments.map((segment) => `${segment.label}, 가중치 ${segment.weight}`).join('; ')}`}
+        aria-label={`${label}: ${segments.map((segment) => `${segment.label}, 가중치 ${segment.weight}`).join('; ')}`}
       />
       <ul className={styles.screenReaderList} aria-label="현재 룰렛 항목 및 가중치">
         {segments.map((segment) => (

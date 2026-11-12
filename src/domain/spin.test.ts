@@ -20,23 +20,22 @@ describe('deterministic spin geometry', () => {
   it('solves a rest angle inside the selected segment for 1,000 generated cases', () => {
     fc.assert(
       fc.property(
-        fc.array(fc.integer({ min: 1, max: 1_000 }), { minLength: 1, maxLength: 30 }),
+        fc.array(fc.integer({ min: 1, max: 1_000 }), { minLength: 1, maxLength: 500 }),
         fc.double({
-          min: -1_000_000,
-          max: 1_000_000,
           noNaN: true,
           noDefaultInfinity: true,
         }),
         fc.double({ min: 0, max: 1, noNaN: true, noDefaultInfinity: true }),
         (weights, pointerAngle, fraction) => {
           const segments = makeSegments(weights);
-          const chosenIndex = Math.abs(Math.trunc(pointerAngle)) % segments.length;
+          const chosenIndex =
+            Math.trunc(normalizeDegrees(pointerAngle)) % segments.length;
           const target = segments[chosenIndex]!;
           const restAngle = solveRestAngle(segments, target.id, pointerAngle, fraction);
           expect(segmentAtAngle(segments, restAngle, pointerAngle)).toBe(target.id);
         },
       ),
-      { numRuns: 1_000 },
+      { numRuns: 1_000, seed: 20260930 },
     );
   });
 
@@ -64,6 +63,10 @@ describe('deterministic spin geometry', () => {
     expect(segmentAtAngle(single, solveRestAngle(single, 'id-0', 270, 0.23), 270)).toBe(
       'id-0',
     );
+
+    const extremePointer = makeSegments([1, 1_000, 1]);
+    const extremeRest = solveRestAngle(extremePointer, 'id-0', Number.MAX_VALUE, 0.2);
+    expect(segmentAtAngle(extremePointer, extremeRest, Number.MAX_VALUE)).toBe('id-0');
 
     const maximum = makeSegments(Array.from({ length: 500 }, () => 1_000));
     const rest = solveRestAngle(maximum, 'id-499', 270, 0.75);
@@ -93,7 +96,7 @@ describe('deterministic spin geometry', () => {
           expect(Math.min(difference, 360 - difference)).toBeLessThan(1e-8);
         },
       ),
-      { numRuns: 1_000 },
+      { numRuns: 1_000, seed: 20260930 },
     );
     expect(() => targetRotationAtRest(Number.NaN, 0)).toThrow(RangeError);
     expect(() => targetRotationAtRest(0, 0, -1)).toThrow(RangeError);
